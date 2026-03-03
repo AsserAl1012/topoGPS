@@ -1,0 +1,17 @@
+method,metric,mean,std,n
+graph_ppr,acc,1.000000,0.000000,3
+graph_ppr,coarse_visited,0.000000,0.000000,3
+graph_ppr,fine_steps,0.000000,0.000000,3
+graph_ppr,rt_ms,5.437644,0.604706,3
+nn,acc,0.000000,0.000000,3
+nn,coarse_visited,0.000000,0.000000,3
+nn,fine_steps,0.000000,0.000000,3
+nn,rt_ms,0.113510,0.013430,3
+topogps_cuepath,acc,0.977778,0.038490,3
+topogps_cuepath,coarse_visited,2.977778,0.038490,3
+topogps_cuepath,fine_steps,0.000000,0.000000,3
+topogps_cuepath,rt_ms,2.068683,0.083595,3
+topogps_no_cue,acc,0.000000,0.000000,3
+topogps_no_cue,coarse_visited,19.633333,18.931543,3
+topogps_no_cue,fine_steps,0.000000,0.000000,3
+topogps_no_cue,rt_ms,1.231062,0.030001,3

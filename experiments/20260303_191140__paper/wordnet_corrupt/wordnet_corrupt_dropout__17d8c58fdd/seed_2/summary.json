@@ -1,0 +1,26 @@
+{
+  "nn": {
+    "acc": 0.0,
+    "rt_ms": 0.14487333440532288,
+    "coarse_visited": 0.0,
+    "fine_steps": 0.0
+  },
+  "graph_ppr": {
+    "acc": 0.9333333333333333,
+    "rt_ms": 4.304206666226189,
+    "coarse_visited": 0.0,
+    "fine_steps": 0.0
+  },
+  "topogps_cuepath": {
+    "acc": 0.6,
+    "rt_ms": 1.9793933335070808,
+    "coarse_visited": 2.2666666666666666,
+    "fine_steps": 0.0
+  },
+  "topogps_no_cue": {
+    "acc": 0.0,
+    "rt_ms": 49.4875599979423,
+    "coarse_visited": 32.0,
+    "fine_steps": 34.86666666666667
+  }
+}

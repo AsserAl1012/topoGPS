@@ -1,0 +1,16 @@
+{
+  "kind": "wordnet_corrupt",
+  "job": "wordnet_corrupt_dropout",
+  "seed": 2,
+  "params": {
+    "model": "all-mpnet-base-v2",
+    "max_words": 2000,
+    "n_queries": 500,
+    "candidates": 256,
+    "rewire": 0.0,
+    "lr": 0.08,
+    "dropout": 0.7,
+    "steps": 40,
+    "cue_path_only": 1
+  }
+}

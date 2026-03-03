@@ -1,0 +1,11 @@
+nn              acc=0.896  rt_ms=0.01  coarse=0.0  fine=0.0
+minsim          acc=1.000  rt_ms=0.02  coarse=0.0  fine=0.0
+graph_ppr       acc=1.000  rt_ms=12.36  coarse=0.0  fine=0.0
+topogps         acc=1.000  rt_ms=0.89  coarse=3.0  fine=0.0
+topogps_cuepath acc=1.000  rt_ms=0.61  coarse=3.0  fine=0.0
+topogps_no_cue  acc=0.896  rt_ms=13.05  coarse=2305.9  fine=0.0
+
+Wrote: C:\Users\ahmed\OneDrive\Desktop\Asser\topoGPS\experiments\20260303_191140__paper\synthetic\synthetic_bridge__4714b98db6\seed_4\results.csv
+Index dir: C:\Users\ahmed\OneDrive\Desktop\Asser\topoGPS\experiments\20260303_191140__paper\synthetic\synthetic_bridge__4714b98db6\seed_4\index
+Queries:   C:\Users\ahmed\OneDrive\Desktop\Asser\topoGPS\experiments\20260303_191140__paper\synthetic\synthetic_bridge__4714b98db6\seed_4\queries.jsonl
+Next: python scripts/make_figures.py --run <outdir> --make-plots --make-html

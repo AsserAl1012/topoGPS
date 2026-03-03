@@ -1,0 +1,14 @@
+{
+  "model_name": "synthetic",
+  "graph_knn": 12,
+  "graph_min_sim": 0.55,
+  "seed": 1,
+  "normalized": true,
+  "dim": 64,
+  "sigma_knn": 12,
+  "sigma_scale": 1.25,
+  "sigma_min": 0.05,
+  "sigma_max": 1.25,
+  "grid_enabled": false,
+  "synthetic_task": "associative"
+}

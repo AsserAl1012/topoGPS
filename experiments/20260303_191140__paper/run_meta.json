@@ -1,0 +1,121 @@
+{
+  "created_utc": "2026-03-03T19:11:40Z",
+  "python": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+  "platform": {
+    "system": "Windows",
+    "release": "11",
+    "machine": "AMD64"
+  },
+  "git": {
+    "head": "54417c0e7effa1dacb296df2b564dec9ef2158f6",
+    "dirty": true,
+    "status_porcelain": "?? Scripts/run_experiments.py"
+  },
+  "run_root": "C:\\Users\\ahmed\\OneDrive\\Desktop\\Asser\\topoGPS\\experiments\\20260303_191140__paper",
+  "plan": {
+    "version": 1,
+    "jobs": [
+      {
+        "kind": "synthetic",
+        "name": "synthetic_bridge",
+        "seeds": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "base": {
+          "task": "bridge",
+          "n_clusters": 5,
+          "per_cluster": 500,
+          "dim": 64,
+          "graph_knn": 12,
+          "graph_min_sim": 0.55,
+          "max_expansions": 2500,
+          "max_depth": 4,
+          "candidates": 256,
+          "n_queries": 2000,
+          "lr": 0.08
+        },
+        "matrix": {
+          "grid": [
+            0,
+            1
+          ],
+          "steps": [
+            0,
+            120
+          ]
+        }
+      },
+      {
+        "kind": "synthetic",
+        "name": "synthetic_associative",
+        "seeds": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "base": {
+          "task": "associative",
+          "n_clusters": 5,
+          "per_cluster": 500,
+          "dim": 64,
+          "graph_knn": 12,
+          "graph_min_sim": 0.55,
+          "max_expansions": 2500,
+          "max_depth": 4,
+          "candidates": 256,
+          "n_queries": 2000,
+          "lr": 0.08
+        },
+        "matrix": {
+          "grid": [
+            0,
+            1
+          ],
+          "steps": [
+            0,
+            120
+          ]
+        }
+      },
+      {
+        "kind": "wordnet_corrupt",
+        "name": "wordnet_corrupt_dropout",
+        "seeds": [
+          0,
+          1,
+          2
+        ],
+        "base": {
+          "model": "all-mpnet-base-v2",
+          "max_words": 2000,
+          "n_queries": 500,
+          "candidates": 256,
+          "rewire": 0.0,
+          "lr": 0.08
+        },
+        "matrix": {
+          "dropout": [
+            0.0,
+            0.3,
+            0.5,
+            0.7
+          ],
+          "steps": [
+            0,
+            40
+          ],
+          "cue_path_only": [
+            0,
+            1
+          ]
+        }
+      }
+    ]
+  }
+}

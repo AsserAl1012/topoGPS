@@ -1,0 +1,148 @@
+{
+  "cases": [
+    {
+      "kind": "synthetic",
+      "case_id": "synthetic_associative__20ea72b8bb",
+      "n_seeds": 5,
+      "outdir": "C:\\Users\\ahmed\\OneDrive\\Desktop\\Asser\\topoGPS\\experiments\\20260303_191140__paper\\aggregate\\synthetic\\synthetic_associative__20ea72b8bb"
+    },
+    {
+      "kind": "synthetic",
+      "case_id": "synthetic_associative__5e193d77ee",
+      "n_seeds": 5,
+      "outdir": "C:\\Users\\ahmed\\OneDrive\\Desktop\\Asser\\topoGPS\\experiments\\20260303_191140__paper\\aggregate\\synthetic\\synthetic_associative__5e193d77ee"
+    },
+    {
+      "kind": "synthetic",
+      "case_id": "synthetic_associative__c5006a5bd0",
+      "n_seeds": 5,
+      "outdir": "C:\\Users\\ahmed\\OneDrive\\Desktop\\Asser\\topoGPS\\experiments\\20260303_191140__paper\\aggregate\\synthetic\\synthetic_associative__c5006a5bd0"
+    },
+    {
+      "kind": "synthetic",
+      "case_id": "synthetic_associative__e095c69936",
+      "n_seeds": 5,
+      "outdir": "C:\\Users\\ahmed\\OneDrive\\Desktop\\Asser\\topoGPS\\experiments\\20260303_191140__paper\\aggregate\\synthetic\\synthetic_associative__e095c69936"
+    },
+    {
+      "kind": "synthetic",
+      "case_id": "synthetic_bridge__4714b98db6",
+      "n_seeds": 5,
+      "outdir": "C:\\Users\\ahmed\\OneDrive\\Desktop\\Asser\\topoGPS\\experiments\\20260303_191140__paper\\aggregate\\synthetic\\synthetic_bridge__4714b98db6"
+    },
+    {
+      "kind": "synthetic",
+      "case_id": "synthetic_bridge__636047a5d4",
+      "n_seeds": 5,
+      "outdir": "C:\\Users\\ahmed\\OneDrive\\Desktop\\Asser\\topoGPS\\experiments\\20260303_191140__paper\\aggregate\\synthetic\\synthetic_bridge__636047a5d4"
+    },
+    {
+      "kind": "synthetic",
+      "case_id": "synthetic_bridge__66e320cb6b",
+      "n_seeds": 5,
+      "outdir": "C:\\Users\\ahmed\\OneDrive\\Desktop\\Asser\\topoGPS\\experiments\\20260303_191140__paper\\aggregate\\synthetic\\synthetic_bridge__66e320cb6b"
+    },
+    {
+      "kind": "synthetic",
+      "case_id": "synthetic_bridge__f6d4ac219e",
+      "n_seeds": 5,
+      "outdir": "C:\\Users\\ahmed\\OneDrive\\Desktop\\Asser\\topoGPS\\experiments\\20260303_191140__paper\\aggregate\\synthetic\\synthetic_bridge__f6d4ac219e"
+    },
+    {
+      "kind": "wordnet_corrupt",
+      "case_id": "wordnet_corrupt_dropout__17d8c58fdd",
+      "n_seeds": 3,
+      "outdir": "C:\\Users\\ahmed\\OneDrive\\Desktop\\Asser\\topoGPS\\experiments\\20260303_191140__paper\\aggregate\\wordnet_corrupt\\wordnet_corrupt_dropout__17d8c58fdd"
+    },
+    {
+      "kind": "wordnet_corrupt",
+      "case_id": "wordnet_corrupt_dropout__27cca3873d",
+      "n_seeds": 3,
+      "outdir": "C:\\Users\\ahmed\\OneDrive\\Desktop\\Asser\\topoGPS\\experiments\\20260303_191140__paper\\aggregate\\wordnet_corrupt\\wordnet_corrupt_dropout__27cca3873d"
+    },
+    {
+      "kind": "wordnet_corrupt",
+      "case_id": "wordnet_corrupt_dropout__45a5d1abbb",
+      "n_seeds": 3,
+      "outdir": "C:\\Users\\ahmed\\OneDrive\\Desktop\\Asser\\topoGPS\\experiments\\20260303_191140__paper\\aggregate\\wordnet_corrupt\\wordnet_corrupt_dropout__45a5d1abbb"
+    },
+    {
+      "kind": "wordnet_corrupt",
+      "case_id": "wordnet_corrupt_dropout__49945153e2",
+      "n_seeds": 3,
+      "outdir": "C:\\Users\\ahmed\\OneDrive\\Desktop\\Asser\\topoGPS\\experiments\\20260303_191140__paper\\aggregate\\wordnet_corrupt\\wordnet_corrupt_dropout__49945153e2"
+    },
+    {
+      "kind": "wordnet_corrupt",
+      "case_id": "wordnet_corrupt_dropout__4bd7ba9821",
+      "n_seeds": 3,
+      "outdir": "C:\\Users\\ahmed\\OneDrive\\Desktop\\Asser\\topoGPS\\experiments\\20260303_191140__paper\\aggregate\\wordnet_corrupt\\wordnet_corrupt_dropout__4bd7ba9821"
+    },
+    {
+      "kind": "wordnet_corrupt",
+      "case_id": "wordnet_corrupt_dropout__4c5faa4d52",
+      "n_seeds": 3,
+      "outdir": "C:\\Users\\ahmed\\OneDrive\\Desktop\\Asser\\topoGPS\\experiments\\20260303_191140__paper\\aggregate\\wordnet_corrupt\\wordnet_corrupt_dropout__4c5faa4d52"
+    },
+    {
+      "kind": "wordnet_corrupt",
+      "case_id": "wordnet_corrupt_dropout__56f9c9a8dc",
+      "n_seeds": 3,
+      "outdir": "C:\\Users\\ahmed\\OneDrive\\Desktop\\Asser\\topoGPS\\experiments\\20260303_191140__paper\\aggregate\\wordnet_corrupt\\wordnet_corrupt_dropout__56f9c9a8dc"
+    },
+    {
+      "kind": "wordnet_corrupt",
+      "case_id": "wordnet_corrupt_dropout__5f0a5c254d",
+      "n_seeds": 3,
+      "outdir": "C:\\Users\\ahmed\\OneDrive\\Desktop\\Asser\\topoGPS\\experiments\\20260303_191140__paper\\aggregate\\wordnet_corrupt\\wordnet_corrupt_dropout__5f0a5c254d"
+    },
+    {
+      "kind": "wordnet_corrupt",
+      "case_id": "wordnet_corrupt_dropout__697ef18d6d",
+      "n_seeds": 3,
+      "outdir": "C:\\Users\\ahmed\\OneDrive\\Desktop\\Asser\\topoGPS\\experiments\\20260303_191140__paper\\aggregate\\wordnet_corrupt\\wordnet_corrupt_dropout__697ef18d6d"
+    },
+    {
+      "kind": "wordnet_corrupt",
+      "case_id": "wordnet_corrupt_dropout__6d6c6efd08",
+      "n_seeds": 3,
+      "outdir": "C:\\Users\\ahmed\\OneDrive\\Desktop\\Asser\\topoGPS\\experiments\\20260303_191140__paper\\aggregate\\wordnet_corrupt\\wordnet_corrupt_dropout__6d6c6efd08"
+    },
+    {
+      "kind": "wordnet_corrupt",
+      "case_id": "wordnet_corrupt_dropout__8a46a0f157",
+      "n_seeds": 3,
+      "outdir": "C:\\Users\\ahmed\\OneDrive\\Desktop\\Asser\\topoGPS\\experiments\\20260303_191140__paper\\aggregate\\wordnet_corrupt\\wordnet_corrupt_dropout__8a46a0f157"
+    },
+    {
+      "kind": "wordnet_corrupt",
+      "case_id": "wordnet_corrupt_dropout__97fa7ac573",
+      "n_seeds": 3,
+      "outdir": "C:\\Users\\ahmed\\OneDrive\\Desktop\\Asser\\topoGPS\\experiments\\20260303_191140__paper\\aggregate\\wordnet_corrupt\\wordnet_corrupt_dropout__97fa7ac573"
+    },
+    {
+      "kind": "wordnet_corrupt",
+      "case_id": "wordnet_corrupt_dropout__a9de1b3db3",
+      "n_seeds": 3,
+      "outdir": "C:\\Users\\ahmed\\OneDrive\\Desktop\\Asser\\topoGPS\\experiments\\20260303_191140__paper\\aggregate\\wordnet_corrupt\\wordnet_corrupt_dropout__a9de1b3db3"
+    },
+    {
+      "kind": "wordnet_corrupt",
+      "case_id": "wordnet_corrupt_dropout__b2e46a6d94",
+      "n_seeds": 3,
+      "outdir": "C:\\Users\\ahmed\\OneDrive\\Desktop\\Asser\\topoGPS\\experiments\\20260303_191140__paper\\aggregate\\wordnet_corrupt\\wordnet_corrupt_dropout__b2e46a6d94"
+    },
+    {
+      "kind": "wordnet_corrupt",
+      "case_id": "wordnet_corrupt_dropout__cd7f6483db",
+      "n_seeds": 3,
+      "outdir": "C:\\Users\\ahmed\\OneDrive\\Desktop\\Asser\\topoGPS\\experiments\\20260303_191140__paper\\aggregate\\wordnet_corrupt\\wordnet_corrupt_dropout__cd7f6483db"
+    },
+    {
+      "kind": "wordnet_corrupt",
+      "case_id": "wordnet_corrupt_dropout__def10dfc05",
+      "n_seeds": 3,
+      "outdir": "C:\\Users\\ahmed\\OneDrive\\Desktop\\Asser\\topoGPS\\experiments\\20260303_191140__paper\\aggregate\\wordnet_corrupt\\wordnet_corrupt_dropout__def10dfc05"
+    }
+  ]
+}

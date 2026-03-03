@@ -1,0 +1,20 @@
+{
+  "kind": "synthetic",
+  "job": "synthetic_associative",
+  "seed": 0,
+  "params": {
+    "task": "associative",
+    "n_clusters": 5,
+    "per_cluster": 500,
+    "dim": 64,
+    "graph_knn": 12,
+    "graph_min_sim": 0.55,
+    "max_expansions": 2500,
+    "max_depth": 4,
+    "candidates": 256,
+    "n_queries": 2000,
+    "lr": 0.08,
+    "grid": 1,
+    "steps": 0
+  }
+}
