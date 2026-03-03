@@ -13,6 +13,9 @@ except Exception:  # pragma: no cover
 
 import plotly.graph_objects as go
 
+from .core import QueryConfig, TopoGPS, TopoGPSWorkspace
+from .utils import l2_normalize
+
 
 @dataclass(frozen=True)
 class UMAPConfig:
@@ -56,7 +59,6 @@ def plot_map_3d(
             name="landmarks",
         )
     )
-
     if path_coords is not None and len(path_coords) > 0:
         fig.add_trace(
             go.Scatter3d(
@@ -69,7 +71,6 @@ def plot_map_3d(
                 name="retrieval path",
             )
         )
-
     fig.update_layout(
         title=title,
         scene=dict(
@@ -85,7 +86,8 @@ def plot_map_3d(
 
 def save_figure_html(fig: go.Figure, out: Path) -> Path:
     out.parent.mkdir(parents=True, exist_ok=True)
-    fig.write_html(str(out), include_plotlyjs="cdn")
+    # Embed JS so HTML works offline (paper-friendly).
+    fig.write_html(str(out), include_plotlyjs=True, full_html=True)
     return out
 
 
@@ -97,17 +99,53 @@ def coords_for_path_by_nearest(
     """Map each z(t) to its nearest landmark, then return those 3D coords."""
     if len(path_z) == 0:
         return np.zeros((0, 3), dtype=np.float32)
-
-    # embeddings are typically normalized. we use dot = cosine
-    em = embeddings
+    em = np.asarray(embeddings, dtype=np.float32)
     path = []
     for z in path_z:
-        sims = em @ z.reshape(-1)
+        z = np.asarray(z, dtype=np.float32).reshape(-1)
+        sims = em @ z
         idx = int(np.argmax(sims))
         path.append(coords_3d[idx])
     return np.asarray(path, dtype=np.float32)
 
-from .core import QueryConfig, TopoGPS, TopoGPSWorkspace
+
+def _synthetic_query_vec_from_labels(ws: TopoGPSWorkspace, query: str) -> np.ndarray:
+    """
+    For synthetic indices (model_name='synthetic'), build the query vector from cue labels
+    appearing literally in the query string, e.g. 'c0_000 and c1_000'.
+    """
+    q = (query or "").strip().lower()
+    if not q:
+        raise ValueError("Empty query for synthetic map rendering")
+
+    label_to_idx = {lab.lower(): i for i, lab in enumerate(ws.labels)}
+
+    # token-based fast path
+    tokens = [t.strip() for t in q.replace(",", " ").replace("&", " ").split() if t.strip()]
+    cue_idxs = []
+    for t in tokens:
+        if t in ("and", "or", "+"):
+            continue
+        if t in label_to_idx:
+            cue_idxs.append(int(label_to_idx[t]))
+
+    # fallback: substring match (still cheap at synthetic sizes)
+    if not cue_idxs:
+        for i, lab in enumerate(ws.labels):
+            if lab.lower() in q:
+                cue_idxs.append(i)
+
+    cue_idxs = list(dict.fromkeys(cue_idxs))  # unique preserve order
+    if not cue_idxs:
+        raise ValueError(
+            "Synthetic query did not contain any cue labels. "
+            "Expected something like 'c0_000 and c1_000'."
+        )
+
+    v = np.mean(ws.embeddings[np.asarray(cue_idxs, dtype=int)], axis=0).astype(np.float32)
+    if bool(ws.meta.get("normalized", True)):
+        v = l2_normalize(v, axis=0).astype(np.float32)
+    return v
 
 
 def render_html(
@@ -118,23 +156,22 @@ def render_html(
     cue_matching: bool = False,
     umap_seed: int = 42,
 ) -> Path:
-    """CLI-facing convenience wrapper.
-
-    Writes an interactive 3D HTML map. If `query` is provided, overlays the
-    retrieval path (fine path if available, otherwise coarse path).
-    """
+    """Write an interactive 3D HTML map (optionally with a query path overlay)."""
     coords = project_umap_3d(ws.embeddings, UMAPConfig(random_state=umap_seed))
     path_coords = None
-
     title = "TopoGPS semantic map"
+
     if query:
         title = f"TopoGPS semantic map — {query}"
         qcfg = QueryConfig(enable_cue_matching=cue_matching)
-        # try to request fine steps if the signature supports it
-        try:
+
+        model_name = str(ws.meta.get("model_name", "")).strip().lower()
+        if model_name == "synthetic":
+            qvec = _synthetic_query_vec_from_labels(ws, query)
+            res = TopoGPS.query_vec(ws, qvec, query=query, cfg=qcfg, top_k=5, emit_fine_steps=True)
+        else:
+            # Normal (HF-backed) path
             res = TopoGPS.query(ws, query, cfg=qcfg, top_k=5, emit_fine_steps=True)
-        except TypeError:
-            res = TopoGPS.query(ws, query, cfg=qcfg, top_k=5)
 
         fine = getattr(res, "fine_path_z", None)
         if isinstance(fine, (list, tuple)) and len(fine) >= 2:

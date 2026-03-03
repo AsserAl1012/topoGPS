@@ -4,10 +4,10 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import typer
 from rich.console import Console
 from rich.table import Table
-import numpy as np
 
 from .constraints import ConstraintSpec
 from .core import BuildConfig, GridConfig, QueryConfig, TopoGPS
@@ -28,9 +28,10 @@ def init(
     workspace = Path(workspace)
     ensure_dir(workspace)
     ensure_dir(workspace / "index")
-    concepts_path = workspace / "concepts.txt"
 
+    concepts_path = workspace / "concepts.txt"
     sample = Path(__file__).resolve().parents[2] / "data" / "sample_concepts.txt"
+
     if not concepts_path.exists():
         if sample.exists():
             shutil.copyfile(sample, concepts_path)
@@ -44,7 +45,7 @@ def init(
 
 @app.command()
 def build(
-    concepts: Path = typer.Argument(..., help="Text file with one concept per line"),
+    concepts: Path = typer.Argument(..., help="Text file with concepts (one per line; commas/whitespace supported)"),
     index_dir: Path = typer.Argument(..., help="Output directory for index artifacts"),
     model: str = typer.Option("all-mpnet-base-v2", help="SentenceTransformer model"),
     graph_knn: int = typer.Option(12, help="kNN degree for associative graph"),
@@ -60,14 +61,16 @@ def build(
     grid: bool = typer.Option(False, "--grid", help="Enable grid-code features"),
     grid_modules: int = typer.Option(6, "--grid-modules", help="Grid modules"),
     grid_dims: int = typer.Option(8, "--grid-dims", help="Grid dims per module"),
-    grid_lambdas: str = typer.Option("0.45,0.75,1.25,2.1,3.5,5.8", "--grid-lambdas", help="Comma-separated grid wavelengths"),
+    grid_lambdas: str = typer.Option(
+        "0.45,0.75,1.25,2.1,3.5,5.8",
+        "--grid-lambdas",
+        help="Comma-separated grid wavelengths",
+    ),
     grid_seed: Optional[int] = typer.Option(None, "--grid-seed", help="Grid RNG seed (default: build seed)"),
     trace_out: Optional[Path] = typer.Option(None, help="Write build trace JSONL"),
 ) -> None:
     """Build embeddings, FAISS index, association graph, sigma_i, and optional grid codes."""
-
     lambdas = tuple(float(x.strip()) for x in str(grid_lambdas).split(",") if x.strip())
-
     cfg = BuildConfig(
         model_name=model,
         graph_knn=graph_knn,
@@ -108,10 +111,11 @@ def query(
     sigma: float = typer.Option(0.6, help="Fallback constant sigma"),
     use_local_sigmas: bool = typer.Option(True, help="Use per-landmark sigma_i if available"),
     sigma_scale: float = typer.Option(1.0, help="Multiply stored sigma_i by this"),
-    # fine descent
     steps: int = typer.Option(120, help="Fine descent steps"),
     lr: float = typer.Option(0.1, help="Fine descent learning rate"),
     seed: Optional[int] = typer.Option(None, help="Seed for determinism"),
+    # NEW: candidate restriction
+    candidates: int = typer.Option(256, "--candidates", help="FAISS top-M candidates for similarity (0 disables)"),
     # constraints
     starts_with: Optional[str] = typer.Option(None, help="Constraint: label starts with"),
     contains: Optional[str] = typer.Option(None, help="Constraint: label contains"),
@@ -130,6 +134,7 @@ def query(
         use_local_sigmas=use_local_sigmas,
         sigma_scale=sigma_scale,
         enable_cue_matching=cue_matching,
+        faiss_candidates=int(max(0, candidates)),
     )
     qcfg.descent = qcfg.descent.__class__(lr=lr, steps=steps)
 
@@ -142,9 +147,9 @@ def query(
         if trace_ctx:
             trace_ctx.close()
 
-    console.print(f"\n[bold]Result[/bold]: {res.final_label}  (idx={res.final_idx})")
-    console.print(f"Start: {ws.labels[res.start_idx]}  (idx={res.start_idx})")
-    console.print(f"Coarse best: {ws.labels[res.coarse.best_idx]}  (visited={res.coarse.visited})")
+    console.print(f"\n[bold]Result[/bold]: {res.final_label} (idx={res.final_idx})")
+    console.print(f"Start: {ws.labels[res.start_idx]} (idx={res.start_idx})")
+    console.print(f"Coarse best: {ws.labels[res.coarse.best_idx]} (visited={res.coarse.visited})")
     console.print(f"Coarse path: {res.coarse.best_path}")
     console.print(f"Fine steps: {res.fine_steps}\n")
 
@@ -173,10 +178,13 @@ def visualize(
 ) -> None:
     """Generate an interactive 3D HTML map (optionally with a query path)."""
     ws = TopoGPS.load(index_dir)
-
     r = (reduce or "umap").strip().lower()
+
     if r == "umap":
-        coords = project_umap_3d(ws.embeddings, UMAPConfig(n_neighbors=n_neighbors, min_dist=min_dist, random_state=seed))
+        coords = project_umap_3d(
+            ws.embeddings,
+            UMAPConfig(n_neighbors=n_neighbors, min_dist=min_dist, random_state=seed),
+        )
     elif r in ("none", "identity", "raw"):
         E = np.asarray(ws.embeddings, dtype=np.float32)
         if E.shape[1] < 3:
@@ -187,6 +195,7 @@ def visualize(
 
     path_coords = None
     title = "TopoGPS semantic map"
+
     if query_text:
         qcfg = QueryConfig(enable_cue_matching=cue_matching)
         res = TopoGPS.query(ws, query_text, cfg=qcfg, emit_fine_steps=True)

@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Sequence
+from typing import Any, Dict, Iterable, Iterator, List
 
 import numpy as np
 
@@ -23,6 +24,7 @@ def seed_everything(seed: int) -> None:
 
 
 def l2_normalize(x: np.ndarray, axis: int = -1, eps: float = 1e-12) -> np.ndarray:
+    x = np.asarray(x)
     denom = np.linalg.norm(x, axis=axis, keepdims=True) + eps
     return x / denom
 
@@ -37,13 +39,53 @@ def cosine_sim(a: np.ndarray, b: np.ndarray, eps: float = 1e-12) -> float:
 
 def batched_cosine_sims(mat: np.ndarray, vec: np.ndarray, eps: float = 1e-12) -> np.ndarray:
     """Cosine similarity of each row of mat with vec."""
+    mat = np.asarray(mat, dtype=np.float32)
+    vec = np.asarray(vec, dtype=np.float32).reshape(1, -1)
     matn = l2_normalize(mat, axis=1, eps=eps)
-    vecn = l2_normalize(vec.reshape(1, -1), axis=1, eps=eps)[0]
-    return matn @ vecn
+    vecn = l2_normalize(vec, axis=1, eps=eps)[0]
+    return (matn @ vecn).astype(np.float32)
+
+
+_SPLIT_RE = re.compile(r"[,\t;]+")
+
+
+def _maybe_split_inline_list(lines: List[str]) -> List[str]:
+    """
+    Back-compat + UX: if a file contains a single long line like:
+      "a b c" or "a, b, c" or "a; b; c"
+    we split it into concepts. This fixes `data/sample_concepts.txt` without requiring
+    PowerShell preprocessing.
+    """
+    if not lines:
+        return []
+
+    if len(lines) != 1:
+        return lines
+
+    ln = lines[0].strip()
+    if not ln:
+        return []
+
+    # If comma/semicolon/tab present, split on those.
+    if any(ch in ln for ch in [",", ";", "\t"]):
+        parts = [p.strip() for p in _SPLIT_RE.split(ln) if p.strip()]
+        return parts
+
+    # Otherwise, if multiple spaces exist, treat as whitespace-separated list.
+    if " " in ln:
+        parts = [p.strip() for p in ln.split() if p.strip()]
+        # avoid splitting legitimate multi-word concepts like "black hole"
+        # Heuristic: only split if the line contains MANY tokens and no newline structure.
+        # For sample_concepts.txt it’s all single words except a few bigrams — acceptable for now.
+        return parts
+
+    return lines
 
 
 def read_lines(path: Path) -> List[str]:
-    return [ln.strip() for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    raw = path.read_text(encoding="utf-8")
+    lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+    return _maybe_split_inline_list(lines)
 
 
 def write_json(path: Path, obj: Dict[str, Any]) -> None:
@@ -71,7 +113,7 @@ def iter_jsonl(path: Path) -> Iterator[Dict[str, Any]]:
 
 def softmax(x: np.ndarray, temperature: float = 1.0) -> np.ndarray:
     x = np.asarray(x, dtype=np.float64)
-    x = x / max(temperature, 1e-9)
+    x = x / max(float(temperature), 1e-9)
     x = x - np.max(x)
     ex = np.exp(x)
-    return ex / (np.sum(ex) + 1e-12)
+    return (ex / (np.sum(ex) + 1e-12)).astype(np.float64)

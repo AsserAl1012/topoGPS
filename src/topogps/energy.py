@@ -5,74 +5,36 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
-from .grid import GridCode
 
-
-@dataclass
+@dataclass(frozen=True)
 class DescentConfig:
-    lr: float = 0.08
-    steps: int = 40
-    tol_grad: float = 1e-5
-    tol_move: float = 1e-5
+    lr: float = 0.10
+    steps: int = 120
+    tol_grad: float = 1e-6
+    tol_move: float = 1e-6
     clamp_norm: Optional[float] = None
     project_unit: bool = True
 
 
-@dataclass
-class DescentStep:
+@dataclass(frozen=True)
+class DescentTraceStep:
     step: int
     z: np.ndarray
     grad_norm: float
     move_norm: float
 
 
-def _clamp_vec(z: np.ndarray, *, clamp_norm: Optional[float]) -> np.ndarray:
-    if clamp_norm is None:
-        return z
-    cn = float(clamp_norm)
-    if cn <= 0:
-        return z
-    n = float(np.linalg.norm(z))
-    if n <= cn:
-        return z
-    return (z / max(n, 1e-12)) * cn
+def _l2_normalize_vec(x: np.ndarray, eps: float = 1e-12) -> np.ndarray:
+    n = float(np.linalg.norm(x) + eps)
+    return (x / n).astype(np.float32)
 
 
-def _project_unit(z: np.ndarray) -> np.ndarray:
-    n = float(np.linalg.norm(z))
-    if n <= 1e-12:
-        return z
-    return z / n
-
-
-def _grid_attractor_grad(
-    *,
-    landmarks: np.ndarray,
-    grid_landmarks: np.ndarray,
-    z: np.ndarray,
-    q_grid: np.ndarray,
-) -> np.ndarray:
-    """Approximate grid attractor gradient.
-
-    w_i = relu(cos(grid_i, q_grid))
-    grad = sum_i w_i * (z - landmark_i)
-    """
-    G = np.asarray(grid_landmarks, dtype=np.float32)
-    q = np.asarray(q_grid, dtype=np.float32).reshape(1, -1)
-    z = np.asarray(z, dtype=np.float32)
-    E = np.asarray(landmarks, dtype=np.float32)
-
-    Gn = G / np.maximum(np.linalg.norm(G, axis=1, keepdims=True), 1e-8)
-    qn = q / max(float(np.linalg.norm(q)), 1e-8)
-
-    w = (Gn @ qn.T).reshape(-1).astype(np.float32)
-    w = np.maximum(w, 0.0)
-    s = float(w.sum())
-    if s <= 1e-8:
-        return np.zeros_like(z)
-    w = (w / s).reshape(-1, 1)
-    grad = np.sum(w * (z.reshape(1, -1) - E), axis=0).astype(np.float32)
-    return grad
+def _cosine_sims(mat: np.ndarray, v: np.ndarray, eps: float = 1e-12) -> np.ndarray:
+    mat = np.asarray(mat, dtype=np.float32)
+    v = np.asarray(v, dtype=np.float32).reshape(-1)
+    vn = _l2_normalize_vec(v, eps=eps)
+    mn = mat / (np.linalg.norm(mat, axis=1, keepdims=True) + eps)
+    return (mn @ vn).astype(np.float32)
 
 
 def fine_descent(
@@ -82,64 +44,95 @@ def fine_descent(
     alpha: np.ndarray,
     sigmas: np.ndarray,
     cfg: DescentConfig,
-    grid: Optional[GridCode] = None,
+    init_z: Optional[np.ndarray] = None,
+    grid: Optional[object] = None,
     grid_landmarks: Optional[np.ndarray] = None,
     grid_weight: float = 0.0,
-) -> Tuple[np.ndarray, List[DescentStep]]:
-    """Continuous descent in embedding space.
-
-    Energy: E(z) = sum_i alpha_i * exp(-||z - x_i||^2 / (2*sigma_i^2))
-    We ascend this density (equivalently descend -E).
-
-    If grid/grid_landmarks are provided and grid_weight>0, we add an extra
-    attractor gradient that nudges z toward landmarks whose grid code matches
-    the query's grid code.
+) -> Tuple[np.ndarray, List[DescentTraceStep]]:
     """
-    z = np.asarray(q, dtype=np.float32).copy()
+    Gradient flow over an attraction field induced by landmarks.
 
+    We maximize a weighted mixture-of-Gaussians density by moving toward landmarks:
+      grad ∝ Σ_i alpha_i * exp(-||z-li||^2/(2*sigma_i^2)) * (li - z)/sigma_i^2
+
+    init_z: optional start state (used to make cue-routing still run fine settling).
+    grid term: optional heuristic pull toward landmarks with high grid-code similarity
+               (no backprop through grid features; used as additional attraction weighting).
+    """
     E = np.asarray(landmarks, dtype=np.float32)
     a = np.asarray(alpha, dtype=np.float32).reshape(-1)
     s = np.asarray(sigmas, dtype=np.float32).reshape(-1)
 
-    if E.shape[0] != a.shape[0] or E.shape[0] != s.shape[0]:
-        raise ValueError("landmarks/alpha/sigmas mismatch")
+    n, d = E.shape
+    if a.shape[0] != n or s.shape[0] != n:
+        raise ValueError("alpha/sigmas length mismatch with landmarks")
 
-    q_grid: Optional[np.ndarray] = None
-    use_grid = (grid is not None) and (grid_landmarks is not None) and (float(grid_weight) > 0.0)
-    if use_grid:
-        q_grid = grid.features(np.asarray(q, dtype=np.float32).reshape(-1))
+    z = np.asarray(init_z if init_z is not None else q, dtype=np.float32).reshape(-1)
+    if z.shape[0] != d:
+        raise ValueError("q/init_z dim mismatch with landmarks")
 
-    trace: List[DescentStep] = []
-    prev_z = z.copy()
+    if cfg.project_unit:
+        z = _l2_normalize_vec(z)
+
+    # Work only on nonzero alpha indices
+    idx = np.flatnonzero(a > 0)
+    if idx.size == 0:
+        return z, []
+
+    Esub = E[idx]
+    asub = a[idx]
+    ssub = s[idx]
+
+    eps = 1e-9
+    trace: List[DescentTraceStep] = []
+
+    # Precompute for speed
+    s2 = (ssub * ssub + eps).astype(np.float32)
 
     for t in range(int(cfg.steps)):
-        diffs = z.reshape(1, -1) - E  # (N, D)
-        d2 = np.sum(diffs * diffs, axis=1)  # (N,)
+        # Pull toward landmarks
+        diff = (Esub - z.reshape(1, -1)).astype(np.float32)      # (m,d)
+        d2 = np.sum(diff * diff, axis=1).astype(np.float32)      # (m,)
+        g = np.exp(-0.5 * d2 / s2).astype(np.float32)            # (m,)
+        w = (asub * g / s2).astype(np.float32)                   # (m,)
 
-        ss2 = np.maximum(s * s, 1e-10)
-        w = a * np.exp(-0.5 * d2 / ss2)
+        grad = np.sum(diff * w.reshape(-1, 1), axis=0).astype(np.float32)
 
-        # gradient of density wrt z (up to sign): sum_i w_i * (x_i - z) / sigma_i^2
-        grad = np.sum((w / ss2).reshape(-1, 1) * (E - z.reshape(1, -1)), axis=0).astype(np.float32)
+        # Optional grid attractor heuristic: add extra pull based on grid similarity.
+        if grid_weight > 0.0 and grid is not None and grid_landmarks is not None:
+            # grid.features(z) should return a vector (gdim,)
+            gz = grid.features(z)
+            if gz is not None:
+                GL = np.asarray(grid_landmarks, dtype=np.float32)
+                GLsub = GL[idx]
+                gs = _cosine_sims(GLsub, np.asarray(gz, dtype=np.float32))
+                # turn grid similarity into a soft weighting
+                gs = gs - float(np.max(gs))
+                gsw = np.exp(6.0 * gs).astype(np.float32)
+                gsw = gsw / (float(np.sum(gsw)) + 1e-12)
+                grad += float(grid_weight) * np.sum(diff * (gsw.reshape(-1, 1)), axis=0).astype(np.float32)
 
-        if use_grid and q_grid is not None:
-            grad_grid = _grid_attractor_grad(landmarks=E, grid_landmarks=np.asarray(grid_landmarks), z=z, q_grid=q_grid)
-            grad = grad + float(grid_weight) * (-grad_grid)  # subtract because grad_grid is (z - E_i)
+        grad_norm = float(np.linalg.norm(grad))
+        move = (float(cfg.lr) * grad).astype(np.float32)
+        move_norm = float(np.linalg.norm(move))
 
-        gnorm = float(np.linalg.norm(grad))
-        if gnorm <= float(cfg.tol_grad):
-            trace.append(DescentStep(step=t, z=z.copy(), grad_norm=gnorm, move_norm=0.0))
-            break
+        z_new = (z + move).astype(np.float32)
 
-        z = z + float(cfg.lr) * grad
-        z = _clamp_vec(z, clamp_norm=cfg.clamp_norm)
+        if cfg.clamp_norm is not None:
+            cn = float(cfg.clamp_norm)
+            nz = float(np.linalg.norm(z_new) + 1e-12)
+            if nz > cn:
+                z_new = (z_new * (cn / nz)).astype(np.float32)
+
         if cfg.project_unit:
-            z = _project_unit(z)
+            z_new = _l2_normalize_vec(z_new)
 
-        move = float(np.linalg.norm(z - prev_z))
-        trace.append(DescentStep(step=t, z=z.copy(), grad_norm=gnorm, move_norm=move))
-        if move <= float(cfg.tol_move):
+        trace.append(DescentTraceStep(step=t + 1, z=z_new.copy(), grad_norm=grad_norm, move_norm=move_norm))
+
+        if grad_norm < float(cfg.tol_grad) or move_norm < float(cfg.tol_move):
+            z = z_new
             break
-        prev_z = z.copy()
+
+        z = z_new
 
     return z, trace
