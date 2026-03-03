@@ -1,0 +1,22 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.venv/
+.env
+.cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Artifacts
+*.npy
+*.npz
+*.faiss
+*.gpickle
+*.jsonl
+*.html
+workspace/
