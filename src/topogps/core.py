@@ -62,18 +62,44 @@ def _softmax_alpha(
     mx = float(alpha.max()) if alpha.size else 0.0
     if mx <= 0.0 or not np.isfinite(mx):
         return np.zeros(n, dtype=np.float32)
+
     alpha = alpha / (mx + 1e-12)
     return alpha.astype(np.float32)
+
+
+def _is_word_boundary(q: str, start: int, end: int) -> bool:
+    """
+    Require non-alnum on both sides to avoid substring cue matches
+    (e.g., 'man' accidentally matching inside 'human').
+    """
+    if start > 0 and q[start - 1].isalnum():
+        return False
+    if end < len(q) and q[end].isalnum():
+        return False
+    return True
 
 
 def _extract_cue_indices(query: str, labels: List[str], *, max_cues: int = 3) -> List[int]:
     q = (query or "").lower()
     spans: List[Tuple[int, int, int]] = []
+
     for i, lab in enumerate(labels):
         lab_l = lab.lower()
-        s = q.find(lab_l)
-        if s >= 0:
-            spans.append((s, s + len(lab_l), i))
+        if not lab_l:
+            continue
+
+        # find ALL occurrences, keep only word-boundary matches
+        pos = 0
+        while True:
+            s = q.find(lab_l, pos)
+            if s < 0:
+                break
+            e = s + len(lab_l)
+            if _is_word_boundary(q, s, e):
+                spans.append((s, e, i))
+            pos = s + 1
+
+    # prefer longer matches, then earlier
     spans.sort(key=lambda t: (-(t[1] - t[0]), t[0]))
 
     chosen: List[Tuple[int, int, int]] = []
@@ -117,6 +143,7 @@ def _cue_bridge_score(
     bridge = inter - balance_penalty * imbalance
 
     score = (1.0 - cue_mix) * query_sims + cue_mix * bridge
+
     if cue_idxs:
         score = score.copy()
         score[cue_idxs] -= float(cue_penalty)
@@ -156,7 +183,7 @@ class QueryConfig:
     use_local_sigmas: bool = True
     sigma_scale: float = 1.0
 
-    descent: "DescentConfig" = field(default_factory=lambda: DescentConfig())
+    descent: DescentConfig = field(default_factory=lambda: DescentConfig())
 
     alpha_temp: float = 8.0
     alpha_top_n: int = 64
@@ -211,6 +238,7 @@ class TopoGPSWorkspace:
                 lambdas_list = [float(x) for x in lambdas]
             else:
                 lambdas_list = list(GridConfig().lambdas)
+
             seed = int(self.meta.get("grid_seed", self.meta.get("seed", 42)))
             self.grid = GridCode.random(
                 D=dim,
@@ -221,6 +249,7 @@ class TopoGPSWorkspace:
                     "seed": seed,
                 },
             )
+
             if self.grid_feats is None:
                 self.grid_feats = self.grid.features(self.embeddings)
 
@@ -324,6 +353,7 @@ class TopoGPS:
             "sigma_max": float(cfg.sigma_cfg.max_sigma),
             "grid_enabled": grid_enabled,
         }
+
         if grid_enabled:
             meta.update(
                 {
@@ -333,6 +363,7 @@ class TopoGPS:
                     "grid_seed": int(cfg.grid.seed if cfg.grid.seed is not None else cfg.seed),
                 }
             )
+
         if meta_extra:
             meta.update(meta_extra)
 
@@ -374,13 +405,13 @@ class TopoGPS:
         qstr = str(query or "")
         model_name = str(ws.meta.get("model_name", "all-mpnet-base-v2"))
         normalized = bool(ws.meta.get("normalized", True))
+
         q_emb = encode_texts([qstr], model_name=model_name, normalize=normalized).astype(np.float32)
         q = q_emb[0].reshape(-1)
-
         return TopoGPS.query_vec(
             ws,
             q,
-            query=qstr,
+            query_text=qstr,
             cfg=cfg,
             constraints=constraints,
             trace=trace,
@@ -413,10 +444,10 @@ class TopoGPS:
         n = len(ws.labels)
         normalized = bool(ws.meta.get("normalized", True))
 
-        # FAISS candidate restriction
-        sem_sims: np.ndarray
+        # FAISS candidate restriction (optional)
         cand_idxs: Optional[np.ndarray] = None
         M = int(max(0, cfg.faiss_candidates))
+
         if normalized and ws.faiss_index is not None and 0 < M < n:
             qn = l2_normalize(q.reshape(1, -1), axis=1)[0].astype(np.float32)
             _, I = ws.faiss_index.search(qn.reshape(1, -1), min(M, n))
@@ -432,6 +463,7 @@ class TopoGPS:
             sem_sims = batched_cosine_sims(ws.embeddings, q).astype(np.float32)
 
         sims = sem_sims
+
         if cfg.grid_sim_weight > 0.0 and ws.grid is not None and ws.grid_feats is not None:
             qg = ws.grid.features(l2_normalize(q, axis=0) if normalized else q)
             if cand_idxs is not None:
@@ -439,6 +471,7 @@ class TopoGPS:
                 grid_sims[cand_idxs] = batched_cosine_sims(ws.grid_feats[cand_idxs], qg).astype(np.float32)
             else:
                 grid_sims = batched_cosine_sims(ws.grid_feats, qg).astype(np.float32)
+
             w = float(max(0.0, min(1.0, cfg.grid_sim_weight)))
             sims = np.where(
                 np.isfinite(sem_sims) & np.isfinite(grid_sims),
@@ -448,6 +481,7 @@ class TopoGPS:
 
         valid_mask = np.ones(n, dtype=bool)
         penalty = np.zeros(n, dtype=np.float32)
+
         if cfg.soft_constraints:
             wts = constraint_soft_weights(
                 ws.labels,
@@ -489,26 +523,21 @@ class TopoGPS:
         cue_idxs: List[int] = []
         if cfg.enable_cue_matching and qstr:
             cue_idxs = _extract_cue_indices(qstr, ws.labels)
-            cue_idxs = [i for i in cue_idxs if valid_mask[i]]
+        cue_idxs = [i for i in cue_idxs if valid_mask[i]]
 
         score_prior = masked_sims
         start_idx = best_idx
-
         cue_mode = False
-        cue_src = None
-        cue_dst = None
         cue_internal: List[int] = []
-        alpha = None
-        coarse = None
-        init_z = None
+        alpha: Optional[np.ndarray] = None
+        coarse: Optional[CoarseResult] = None
+        init_z: Optional[np.ndarray] = None
 
-        # cue mode
+        # ---- cue mode ----
         if len(cue_idxs) >= 2:
             cue_mode = True
-            cue_src = int(cue_idxs[0])
-            cue_dst = int(cue_idxs[1])
-            src = cue_src
-            dst = cue_dst
+            src = int(cue_idxs[0])
+            dst = int(cue_idxs[1])
 
             cue_sims = np.stack(
                 [batched_cosine_sims(ws.embeddings, ws.embeddings[i]) for i in cue_idxs[:2]],
@@ -531,16 +560,25 @@ class TopoGPS:
                 coarse_path = [src]
 
             cue_internal = [int(i) for i in coarse_path[1:-1]]
+
             if cue_internal:
                 coarse_best = int(max(cue_internal, key=lambda i: float(score_prior[i])))
             else:
                 coarse_best = int(max(coarse_path, key=lambda i: float(score_prior[int(i)])))
 
-            coarse = CoarseResult(best_idx=coarse_best, best_path=[int(i) for i in coarse_path], visited=len(coarse_path))
+            coarse = CoarseResult(
+                best_idx=coarse_best,
+                best_path=[int(i) for i in coarse_path],
+                visited=len(coarse_path),
+            )
             start_idx = src
 
             if cfg.cue_path_only:
-                fine_path_z = [ws.embeddings[int(i)].copy() for i in coarse.best_path] if emit_fine_steps else [ws.embeddings[int(coarse_best)].copy()]
+                fine_path_z = (
+                    [ws.embeddings[int(i)].copy() for i in coarse.best_path]
+                    if emit_fine_steps
+                    else [ws.embeddings[int(coarse_best)].copy()]
+                )
                 return QueryResult(
                     query=qstr,
                     start_idx=start_idx,
@@ -552,24 +590,29 @@ class TopoGPS:
                     fine_path_z=fine_path_z,
                 )
 
-            # IMPORTANT: restrict alpha to internal cue-path nodes ONLY (avoid drifting to cues)
+            # alpha only on internal nodes (avoid drifting back to cues)
             alpha = np.zeros(n, dtype=np.float32)
             if cue_internal:
-                w_int = _stable_softmax(np.asarray([score_prior[i] for i in cue_internal], dtype=np.float32), temp=cfg.alpha_temp).astype(np.float32)
+                w_int = _stable_softmax(
+                    np.asarray([score_prior[i] for i in cue_internal], dtype=np.float32),
+                    temp=cfg.alpha_temp,
+                ).astype(np.float32)
                 for ii, wi in zip(cue_internal, w_int):
                     alpha[ii] = float(wi)
             else:
-                # degenerate path: fall back to sparse alpha around best_idx
-                alpha = _softmax_alpha(score_prior, temp=cfg.alpha_temp, top_n=cfg.alpha_top_n, force_keep=[best_idx])
+                alpha = _softmax_alpha(
+                    score_prior, temp=cfg.alpha_temp, top_n=cfg.alpha_top_n, force_keep=[coarse_best]
+                )
 
             mx = float(alpha.max())
             if mx > 0:
                 alpha = (alpha / (mx + 1e-12)).astype(np.float32)
 
-            init_z = ws.embeddings[int(coarse_best)].copy()
+            # start fine descent from the cue location
+            init_z = ws.embeddings[int(src)].copy()
 
+        # ---- standard mode ----
         else:
-            # standard mode
             alpha = _softmax_alpha(score_prior, temp=cfg.alpha_temp, top_n=cfg.alpha_top_n, force_keep=[best_idx])
             coarse = coarse_search(
                 ws.graph,
@@ -608,7 +651,6 @@ class TopoGPS:
             grid_weight=float(cfg.grid_attractor_weight),
         )
 
-        # readout similarity
         final_sem_sims = batched_cosine_sims(ws.embeddings, z_final).astype(np.float32)
         final_sims = final_sem_sims
 
@@ -621,7 +663,7 @@ class TopoGPS:
         final_sims = final_sims - penalty
         final_sims[~valid_mask] = -np.inf
 
-        # CUE MODE READOUT: choose only within alpha-support (internal path nodes)
+        # cue-mode readout: only within internal path nodes if available
         if cue_mode and cue_internal:
             cand = np.asarray([i for i in cue_internal if valid_mask[i]], dtype=int)
             if cand.size > 0:
@@ -629,7 +671,6 @@ class TopoGPS:
             else:
                 final_idx = int(np.argmax(final_sims))
         else:
-            # standard readout mix
             final_mix = 0.25
             final_scores = ((1.0 - final_mix) * final_sims + final_mix * score_prior).astype(np.float32)
             final_scores[~valid_mask] = -np.inf

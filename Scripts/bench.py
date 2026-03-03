@@ -1,318 +1,392 @@
+#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
 import csv
+import json
 import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import networkx as nx
 import numpy as np
 
 from topogps.core import BuildConfig, GridConfig, QueryConfig, TopoGPS
-from topogps.utils import l2_normalize, seed_everything, write_jsonl
+from topogps.utils import l2_normalize, seed_everything
 
 
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="TopoGPS benchmark harness (paper-grade).")
-    p.add_argument("--outdir", type=Path, default=Path("results/run"), help="Output directory")
-    p.add_argument("--seed", type=int, default=42, help="RNG seed")
-    p.add_argument("--dim", type=int, default=64, help="Synthetic embedding dim")
-    p.add_argument("--clusters", type=int, default=5, help="Number of clusters (c0..cK)")
-    p.add_argument("--per-cluster", type=int, default=120, help="Nodes per cluster")
-    p.add_argument("--noise", type=float, default=0.08, help="Cluster noise")
-    p.add_argument("--bridge-noise", type=float, default=0.03, help="Bridge noise")
-    p.add_argument("--query-noise", type=float, default=0.03, help="Query noise")
-    p.add_argument("--cue-b-mix", type=float, default=0.15, help="Query = cueA + mix*cueB + noise")
-    p.add_argument("--n-queries", type=int, default=2000, help="Number of random bridge queries to generate")
-    p.add_argument("--task", type=str, default="associative", choices=["geometric", "associative"], help="Benchmark task")
-    p.add_argument("--grid", action="store_true", help="Enable grid features in build")
-    p.add_argument("--candidates", type=int, default=256, help="FAISS top-M candidates (0 disables)")
-    p.add_argument("--steps", type=int, default=120, help="Fine descent steps")
-    p.add_argument("--lr", type=float, default=0.10, help="Fine descent lr")
-    p.add_argument("--beta", type=float, default=1.0, help="Coarse search beta")
-    p.add_argument("--max-depth", type=int, default=4, help="Coarse max depth")
-    p.add_argument("--max-expansions", type=int, default=2500, help="Coarse max expansions")
-    p.add_argument(
-        "--methods",
-        type=str,
-        default="nn,minsim,graph_ppr,topogps,topogps_cuepath,topogps_no_cue",
-        help="Comma-separated methods: nn,minsim,graph_ppr,topogps,topogps_cuepath,topogps_no_cue",
-    )
-    return p.parse_args()
+@dataclass
+class QueryItem:
+    qid: int
+    cue_a: int
+    cue_b: int
+    target: int
+    query_text: str
+    q_vec: np.ndarray
 
 
-def make_synth_world(
+def _cos_sims(E: np.ndarray, v: np.ndarray) -> np.ndarray:
+    return (E @ v.reshape(-1)).astype(np.float32)
+
+
+def _method_nn(E: np.ndarray, q: np.ndarray) -> int:
+    return int(np.argmax(_cos_sims(E, q)))
+
+
+def _method_minsim(E: np.ndarray, cue_a: np.ndarray, cue_b: np.ndarray) -> np.ndarray:
+    sa = _cos_sims(E, cue_a)
+    sb = _cos_sims(E, cue_b)
+    return np.minimum(sa, sb)
+
+
+def _method_graph_ppr(
+    G: nx.Graph, cue_a_idx: int, cue_b_idx: int, *, exclude: Optional[set] = None
+) -> int:
+    n = G.number_of_nodes()
+    pers = {i: 0.0 for i in range(n)}
+    pers[int(cue_a_idx)] = 0.5
+    pers[int(cue_b_idx)] = 0.5
+    pr = nx.pagerank(G, alpha=0.85, personalization=pers, weight="weight")
+    exclude = exclude or set()
+    best = None
+    bestv = -1.0
+    for i, v in pr.items():
+        if i in exclude:
+            continue
+        if v > bestv:
+            bestv = float(v)
+            best = int(i)
+    return int(best) if best is not None else int(cue_a_idx)
+
+
+def _make_synthetic(
     *,
-    seed: int,
-    dim: int,
-    clusters: int,
-    per_cluster: int,
-    noise: float,
-    bridge_noise: float,
     task: str,
-) -> Tuple[List[str], np.ndarray, Dict[str, int]]:
+    n_clusters: int,
+    per_cluster: int,
+    dim: int,
+    seed: int,
+) -> Tuple[List[str], np.ndarray, nx.Graph, List[QueryItem]]:
+    """
+    Two synthetic tasks:
+
+    bridge:
+      - true bridge embedding is approx midpoint of cue clusters
+      - minsim baseline often works (sanity + "easy" condition)
+
+    associative:
+      - bridge embedding is close to cueA but far from cueB
+      - embedding-only baselines fail; graph path solves
+    """
     rng = np.random.default_rng(seed)
-    centers = l2_normalize(rng.standard_normal((clusters, dim)).astype(np.float32), axis=1)
+    centers = rng.standard_normal((n_clusters, dim)).astype(np.float32)
+    centers = l2_normalize(centers, axis=1)
 
     labels: List[str] = []
     E_list: List[np.ndarray] = []
+    cluster_nodes: List[List[int]] = []
 
-    # cluster nodes
-    for ci in range(clusters):
-        for j in range(per_cluster):
-            lab = f"c{ci}_{j:03d}"
-            x = centers[ci] + noise * rng.standard_normal((dim,)).astype(np.float32)
-            x = l2_normalize(x, axis=0).astype(np.float32)
-            labels.append(lab)
-            E_list.append(x)
+    # base nodes
+    for c in range(n_clusters):
+        nodes = []
+        for i in range(per_cluster):
+            v = centers[c] + 0.10 * rng.standard_normal((dim,), dtype=np.float32)
+            v = l2_normalize(v, axis=0)
+            idx = len(labels)
+            labels.append(f"c{c}_{i:03d}")
+            E_list.append(v)
+            nodes.append(idx)
+        cluster_nodes.append(nodes)
 
-    if task == "geometric":
-        # one midpoint bridge per pair (minsim will dominate; kept as sanity task)
-        for a in range(clusters):
-            for b in range(a + 1, clusters):
-                lab = f"bridge_c{a}_c{b}"
-                x = 0.5 * (centers[a] + centers[b]) + bridge_noise * rng.standard_normal((dim,)).astype(np.float32)
-                x = l2_normalize(x, axis=0).astype(np.float32)
-                labels.append(lab)
-                E_list.append(x)
+    # add one bridge node per unordered cluster-pair
+    bridge_for_pair: Dict[Tuple[int, int], int] = {}
+    for a in range(n_clusters):
+        for b in range(a + 1, n_clusters):
+            if task == "bridge":
+                v = centers[a] + centers[b] + 0.05 * rng.standard_normal((dim,), dtype=np.float32)
+                v = l2_normalize(v, axis=0)
+            elif task == "associative":
+                # intentionally biased toward A (embedding-only multi-cue should fail)
+                v = centers[a] + 0.02 * rng.standard_normal((dim,), dtype=np.float32)
+                v = l2_normalize(v, axis=0)
+            else:
+                raise ValueError(f"Unknown task: {task}")
 
-    else:
-        # associative: per-index connector node. Not a geometric midpoint.
-        # Bridge vectors are biased toward cluster a (so embedding-only intersection fails).
-        for a in range(clusters):
-            for b in range(a + 1, clusters):
-                for j in range(per_cluster):
-                    lab = f"bridge_c{a}_c{b}_{j:03d}"
-                    x = centers[a] + 0.02 * centers[b] + bridge_noise * rng.standard_normal((dim,)).astype(np.float32)
-                    x = l2_normalize(x, axis=0).astype(np.float32)
-                    labels.append(lab)
-                    E_list.append(x)
+            idx = len(labels)
+            labels.append(f"bridge_c{a}_c{b}_000")
+            E_list.append(v)
+            bridge_for_pair[(a, b)] = idx
 
-    E = np.stack(E_list, axis=0).astype(np.float32)
-    label_to_idx = {lab: i for i, lab in enumerate(labels)}
-    return labels, E, label_to_idx
+    E = np.vstack(E_list).astype(np.float32)
+    E = l2_normalize(E, axis=1)
 
+    # base similarity graph (will be replaced by TopoGPS.build_from_embeddings, but we also inject edges)
+    G = nx.Graph()
+    for i in range(len(labels)):
+        G.add_node(i, label=labels[i])
 
-def add_associative_edges(G: nx.Graph, label_to_idx: Dict[str, int], clusters: int, per_cluster: int) -> None:
-    """
-    Make the associative task well-defined:
-      cueA_j -> bridge_ab_j -> cueB_j
-    by adding explicit strong edges.
-    """
-    w = 0.99
-    for a in range(clusters):
-        for b in range(a + 1, clusters):
-            for j in range(per_cluster):
-                cue_a = label_to_idx[f"c{a}_{j:03d}"]
-                cue_b = label_to_idx[f"c{b}_{j:03d}"]
-                bridge = label_to_idx[f"bridge_c{a}_c{b}_{j:03d}"]
-                G.add_edge(cue_a, bridge, weight=w)
-                G.add_edge(bridge, cue_b, weight=w)
+    # Inject explicit cue->bridge edges so cue-path is meaningful.
+    # Weight 1.0 makes it always preferred.
+    for (a, b), br in bridge_for_pair.items():
+        # use representative cue nodes (index 0 in each cluster)
+        cue_a = cluster_nodes[a][0]
+        cue_b = cluster_nodes[b][0]
+        G.add_edge(int(cue_a), int(br), weight=1.0)
+        G.add_edge(int(br), int(cue_b), weight=1.0)
 
-
-def gen_queries(rng: np.random.Generator, *, clusters: int, per_cluster: int, n_queries: int, task: str) -> List[Dict[str, str]]:
-    out: List[Dict[str, str]] = []
-    for k in range(n_queries):
-        a = int(rng.integers(0, clusters))
-        b = int(rng.integers(0, clusters - 1))
+    # Queries: pick random cluster pairs and use those representative cues
+    queries: List[QueryItem] = []
+    qid = 0
+    for _ in range(20000):  # generate pool; bench will slice n_queries
+        a = int(rng.integers(0, n_clusters))
+        b = int(rng.integers(0, n_clusters - 1))
         if b >= a:
             b += 1
         aa, bb = (a, b) if a < b else (b, a)
+        br = bridge_for_pair[(aa, bb)]
+        cue_a = cluster_nodes[a][0]
+        cue_b = cluster_nodes[b][0]
 
-        j = int(rng.integers(0, per_cluster))
-        cue_a = f"c{a}_{j:03d}"
-        cue_b = f"c{b}_{j:03d}"
-        if task == "geometric":
-            expected = f"bridge_c{aa}_c{bb}"
-        else:
-            expected = f"bridge_c{aa}_c{bb}_{j:03d}"
-        q = f"{cue_a} and {cue_b}"
-        out.append({"id": f"q{k:05d}", "cue_a": cue_a, "cue_b": cue_b, "expected": expected, "query": q})
-    return out
+        qv = l2_normalize((E[cue_a] + E[cue_b]) * 0.5, axis=0)
+        qtext = f"{labels[cue_a]} {labels[cue_b]}"
+        queries.append(QueryItem(qid=qid, cue_a=cue_a, cue_b=cue_b, target=br, query_text=qtext, q_vec=qv))
+        qid += 1
 
-
-def nn_pred(E: np.ndarray, q: np.ndarray) -> int:
-    sims = (E @ q.reshape(-1)).astype(np.float32)
-    return int(np.argmax(sims))
+    return labels, E, G, queries
 
 
-def minsim_pred(E: np.ndarray, cue_a_idx: int, cue_b_idx: int) -> int:
-    va = E[cue_a_idx]
-    vb = E[cue_b_idx]
-    sims_a = (E @ va).astype(np.float32)
-    sims_b = (E @ vb).astype(np.float32)
-    score = np.minimum(sims_a, sims_b)
-    score[cue_a_idx] = -np.inf
-    score[cue_b_idx] = -np.inf
-    return int(np.argmax(score))
-
-
-def graph_ppr_pred(G: nx.Graph, cue_a_idx: int, cue_b_idx: int) -> int:
-    personalization = {n: 0.0 for n in G.nodes}
-    personalization[cue_a_idx] = 0.5
-    personalization[cue_b_idx] = 0.5
-    pr = nx.pagerank(G, alpha=0.85, personalization=personalization, weight="weight", max_iter=200, tol=1e-6)
-    pr[cue_a_idx] = -1.0
-    pr[cue_b_idx] = -1.0
-    return int(max(pr, key=lambda k: pr[k]))
-
-
-def main() -> None:
-    args = parse_args()
-    seed_everything(args.seed)
-
-    outdir: Path = args.outdir
+def run_bench(args: argparse.Namespace) -> None:
+    outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
+    figdir = outdir / "figures"
+    figdir.mkdir(parents=True, exist_ok=True)
 
-    labels, E, label_to_idx = make_synth_world(
-        seed=args.seed,
-        dim=args.dim,
-        clusters=args.clusters,
-        per_cluster=args.per_cluster,
-        noise=args.noise,
-        bridge_noise=args.bridge_noise,
+    seed_everything(int(args.seed))
+    seed = int(args.seed)
+
+    if args.task not in ("bridge", "associative"):
+        raise SystemExit("--task must be: bridge | associative")
+
+    n_clusters = int(args.n_clusters)
+    per_cluster = int(args.per_cluster)
+    dim = int(args.dim)
+
+    labels, E, injected_graph, pool = _make_synthetic(
         task=args.task,
+        n_clusters=n_clusters,
+        per_cluster=per_cluster,
+        dim=dim,
+        seed=seed,
     )
 
-    # build TopoGPS index from embeddings (no HF)
-    index_dir = outdir / "index"
-    bcfg = BuildConfig(
+    # Build TopoGPS workspace with synthetic embeddings
+    idx_dir = outdir / "index"
+    cfg = BuildConfig(
         model_name="synthetic",
-        graph_knn=12,
-        graph_min_sim=0.55,
-        seed=args.seed,
+        graph_knn=int(args.graph_knn),
+        graph_min_sim=float(args.graph_min_sim),
+        seed=seed,
         normalize_embeddings=True,
-        sigma_cfg=BuildConfig().sigma_cfg,
         grid=GridConfig(enabled=bool(args.grid)),
     )
-    ws = TopoGPS.build_from_embeddings(labels=labels, embeddings=E, index_dir=index_dir, cfg=bcfg, model_name="synthetic")
-
-    # critical: inject associative edges
-    if args.task == "associative":
-        add_associative_edges(ws.graph, label_to_idx, args.clusters, args.per_cluster)
-
-    base_qcfg = QueryConfig(
-        beta=float(args.beta),
-        max_depth=int(args.max_depth),
-        max_expansions=int(args.max_expansions),
-        faiss_candidates=int(max(0, args.candidates)),
+    ws = TopoGPS.build_from_embeddings(
+        labels=labels,
+        embeddings=E,
+        index_dir=idx_dir,
+        cfg=cfg,
+        meta_extra={"synthetic_task": args.task},
     )
-    base_qcfg.descent = base_qcfg.descent.__class__(lr=float(args.lr), steps=int(args.steps))
 
-    qcfg_topogps = QueryConfig(**{**base_qcfg.__dict__})
-    qcfg_topogps.enable_cue_matching = True
-    qcfg_topogps.cue_path_only = False
-    qcfg_topogps.descent = base_qcfg.descent
+    # Merge injected edges into ws.graph
+    for u, v, d in injected_graph.edges(data=True):
+        w = float(d.get("weight", 0.0))
+        if ws.graph.has_edge(u, v):
+            ws.graph[u][v]["weight"] = max(float(ws.graph[u][v].get("weight", 0.0)), w)
+        else:
+            ws.graph.add_edge(int(u), int(v), weight=w)
 
-    qcfg_cuepath = QueryConfig(**{**base_qcfg.__dict__})
-    qcfg_cuepath.enable_cue_matching = True
-    qcfg_cuepath.cue_path_only = True
-    qcfg_cuepath.descent = base_qcfg.descent
+    # Prepare query list
+    n_queries = int(args.n_queries)
+    queries = pool[:n_queries]
 
-    qcfg_no_cue = QueryConfig(**{**base_qcfg.__dict__})
-    qcfg_no_cue.enable_cue_matching = False
-    qcfg_no_cue.cue_path_only = False
-    qcfg_no_cue.descent = base_qcfg.descent
+    qcfg_full = QueryConfig(
+        enable_cue_matching=True,
+        cue_path_only=False,
+        faiss_candidates=int(args.candidates),
+        max_expansions=int(args.max_expansions),
+        max_depth=int(args.max_depth),
+    )
+    qcfg_full.descent = qcfg_full.descent.__class__(lr=float(args.lr), steps=int(args.steps))
 
-    methods = [m.strip() for m in str(args.methods).split(",") if m.strip()]
+    qcfg_cuepath = QueryConfig(
+        enable_cue_matching=True,
+        cue_path_only=True,
+        faiss_candidates=int(args.candidates),
+        max_expansions=int(args.max_expansions),
+        max_depth=int(args.max_depth),
+    )
+    qcfg_cuepath.descent = qcfg_cuepath.descent.__class__(lr=float(args.lr), steps=int(args.steps))
 
-    rng = np.random.default_rng(args.seed + 777)
-    queries = gen_queries(rng, clusters=args.clusters, per_cluster=args.per_cluster, n_queries=int(args.n_queries), task=args.task)
-    write_jsonl(outdir / "queries.jsonl", queries)
+    qcfg_no_cue = QueryConfig(
+        enable_cue_matching=False,
+        cue_path_only=False,
+        faiss_candidates=int(args.candidates),
+        max_expansions=int(args.max_expansions),
+        max_depth=int(args.max_depth),
+    )
+    qcfg_no_cue.descent = qcfg_no_cue.descent.__class__(lr=float(args.lr), steps=int(args.steps))
 
     rows: List[Dict[str, object]] = []
-    qnoise_rng = np.random.default_rng(args.seed + 999)
 
-    for qobj in queries:
-        qid = str(qobj["id"])
-        cue_a = str(qobj["cue_a"])
-        cue_b = str(qobj["cue_b"])
-        expected = str(qobj["expected"])
-        qstr = str(qobj["query"])
+    def eval_method(name: str) -> Tuple[float, float, float, float]:
+        correct = 0
+        rt_ms_total = 0.0
+        coarse_total = 0.0
+        fine_total = 0.0
 
-        ia = label_to_idx[cue_a]
-        ib = label_to_idx[cue_b]
-        ie = label_to_idx[expected]
-
-        qv = E[ia] + float(args.cue_b_mix) * E[ib] + float(args.query_noise) * qnoise_rng.standard_normal((args.dim,)).astype(np.float32)
-        qv = l2_normalize(qv.astype(np.float32), axis=0).astype(np.float32)
-
-        for m in methods:
+        for qi in queries:
             t0 = time.perf_counter()
-            pred_idx = None
-            coarse_visited = 0
-            fine_steps = 0
 
-            if m == "nn":
-                pred_idx = nn_pred(E, qv)
-            elif m == "minsim":
-                pred_idx = minsim_pred(E, ia, ib)
-            elif m == "graph_ppr":
-                pred_idx = graph_ppr_pred(ws.graph, ia, ib)
-            elif m == "topogps":
-                res = TopoGPS.query_vec(ws, qv, query=qstr, cfg=qcfg_topogps, top_k=1, emit_fine_steps=False)
-                pred_idx = int(res.final_idx)
-                coarse_visited = int(res.coarse.visited)
-                fine_steps = int(res.fine_steps)
-            elif m == "topogps_cuepath":
-                res = TopoGPS.query_vec(ws, qv, query=qstr, cfg=qcfg_cuepath, top_k=1, emit_fine_steps=False)
-                pred_idx = int(res.final_idx)
-                coarse_visited = int(res.coarse.visited)
-                fine_steps = int(res.fine_steps)
-            elif m == "topogps_no_cue":
-                res = TopoGPS.query_vec(ws, qv, query=qstr, cfg=qcfg_no_cue, top_k=1, emit_fine_steps=False)
-                pred_idx = int(res.final_idx)
-                coarse_visited = int(res.coarse.visited)
-                fine_steps = int(res.fine_steps)
+            if name == "nn":
+                pred = _method_nn(E, qi.q_vec)
+                coarse_vis = 0
+                fine_steps = 0
+            elif name == "minsim":
+                score = _method_minsim(E, E[qi.cue_a], E[qi.cue_b])
+                pred = int(np.argmax(score))
+                coarse_vis = 0
+                fine_steps = 0
+            elif name == "graph_ppr":
+                pred = _method_graph_ppr(ws.graph, qi.cue_a, qi.cue_b, exclude={qi.cue_a, qi.cue_b})
+                coarse_vis = 0
+                fine_steps = 0
+            elif name == "topogps":
+                res = TopoGPS.query_vec(ws, qi.q_vec, query_text=qi.query_text, cfg=qcfg_full, emit_fine_steps=False)
+                pred = int(res.final_idx)
+                coarse_vis = float(res.coarse.visited)
+                fine_steps = float(res.fine_steps)
+            elif name == "topogps_cuepath":
+                res = TopoGPS.query_vec(ws, qi.q_vec, query_text=qi.query_text, cfg=qcfg_cuepath, emit_fine_steps=False)
+                pred = int(res.final_idx)
+                coarse_vis = float(res.coarse.visited)
+                fine_steps = float(res.fine_steps)
+            elif name == "topogps_no_cue":
+                res = TopoGPS.query_vec(ws, qi.q_vec, query_text=qi.query_text, cfg=qcfg_no_cue, emit_fine_steps=False)
+                pred = int(res.final_idx)
+                coarse_vis = float(res.coarse.visited)
+                fine_steps = float(res.fine_steps)
             else:
-                raise SystemExit(f"Unknown method: {m}")
+                raise ValueError(name)
 
-            dt_ms = (time.perf_counter() - t0) * 1000.0
-            pred_lab = labels[int(pred_idx)]
-            success = int(int(pred_idx) == ie)
+            t1 = time.perf_counter()
+            rt_ms = (t1 - t0) * 1000.0
+
+            ok = int(pred == qi.target)
+            correct += ok
+            rt_ms_total += rt_ms
+            coarse_total += coarse_vis
+            fine_total += fine_steps
 
             rows.append(
                 {
-                    "id": qid,
                     "task": args.task,
-                    "method": m,
-                    "cue_a": cue_a,
-                    "cue_b": cue_b,
-                    "expected": expected,
-                    "pred": pred_lab,
-                    "success": success,
-                    "coarse_visited": coarse_visited,
+                    "qid": qi.qid,
+                    "method": name,
+                    "cue_a": qi.cue_a,
+                    "cue_b": qi.cue_b,
+                    "target_idx": qi.target,
+                    "pred_idx": pred,
+                    "success": ok,
+                    "rt_ms": rt_ms,
+                    "coarse_visited": coarse_vis,
                     "fine_steps": fine_steps,
-                    "runtime_ms": round(dt_ms, 4),
-                    "candidates": int(args.candidates),
-                    "grid": int(bool(args.grid)),
-                    "seed": int(args.seed),
-                    "n_queries": int(args.n_queries),
                 }
             )
 
-    results_csv = outdir / "results.csv"
-    with results_csv.open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        acc = correct / max(1, len(queries))
+        rt = rt_ms_total / max(1, len(queries))
+        coarse_avg = coarse_total / max(1, len(queries))
+        fine_avg = fine_total / max(1, len(queries))
+        return acc, rt, coarse_avg, fine_avg
+
+    methods = ["nn", "minsim", "graph_ppr", "topogps", "topogps_cuepath", "topogps_no_cue"]
+
+    results_path = outdir / "results.csv"
+    with results_path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(
+            f,
+            fieldnames=[
+                "task",
+                "qid",
+                "method",
+                "cue_a",
+                "cue_b",
+                "target_idx",
+                "pred_idx",
+                "success",
+                "rt_ms",
+                "coarse_visited",
+                "fine_steps",
+            ],
+        )
         w.writeheader()
-        w.writerows(rows)
 
-    by_method: Dict[str, List[Dict[str, object]]] = {}
-    for r in rows:
-        by_method.setdefault(str(r["method"]), []).append(r)
+        summary_lines = []
+        for m in methods:
+            acc, rt, coarse_avg, fine_avg = eval_method(m)
+            summary_lines.append((m, acc, rt, coarse_avg, fine_avg))
+            print(f"{m:<15} acc={acc:.3f}  rt_ms={rt:.2f}  coarse={coarse_avg:.1f}  fine={fine_avg:.1f}")
 
-    print(f"\nWrote: {results_csv}  (task={args.task})")
-    for m, rr in by_method.items():
-        acc = sum(int(x["success"]) for x in rr) / max(1, len(rr))
-        avg_rt = sum(float(x["runtime_ms"]) for x in rr) / max(1, len(rr))
-        avg_cv = sum(int(x["coarse_visited"]) for x in rr) / max(1, len(rr))
-        avg_fs = sum(int(x["fine_steps"]) for x in rr) / max(1, len(rr))
-        print(f"{m:16s} acc={acc:.3f}  rt_ms={avg_rt:.2f}  coarse={avg_cv:.1f}  fine={avg_fs:.1f}")
+        for r in rows:
+            w.writerow(r)
 
-    print(f"\nIndex dir: {index_dir}")
-    print(f"Queries:   {outdir / 'queries.jsonl'}")
-    print("Next: python scripts/make_figures.py --run <outdir> --make-plots --make-html\n")
+    queries_path = outdir / "queries.jsonl"
+    with queries_path.open("w", encoding="utf-8") as f:
+        for qi in queries:
+            f.write(
+                json.dumps(
+                    {
+                        "qid": qi.qid,
+                        "cue_a": int(qi.cue_a),
+                        "cue_b": int(qi.cue_b),
+                        "target_idx": int(qi.target),
+                        "query_text": qi.query_text,
+                        "q_vec": qi.q_vec.astype(float).tolist(),
+                    }
+                )
+                + "\n"
+            )
+
+    print(f"\nWrote: {results_path}")
+    print(f"Index dir: {idx_dir}")
+    print(f"Queries:   {queries_path}")
+    print("Next: python scripts/make_figures.py --run <outdir> --make-plots --make-html")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--outdir", required=True)
+    ap.add_argument("--task", default="bridge", choices=["bridge", "associative"])
+    ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--grid", action="store_true")
+    ap.add_argument("--candidates", type=int, default=256)
+
+    ap.add_argument("--n-queries", type=int, default=2000)
+    ap.add_argument("--n-clusters", type=int, default=5)
+    ap.add_argument("--per-cluster", type=int, default=500)
+    ap.add_argument("--dim", type=int, default=64)
+
+    ap.add_argument("--graph-knn", type=int, default=12)
+    ap.add_argument("--graph-min-sim", type=float, default=0.55)
+
+    ap.add_argument("--max-expansions", type=int, default=2500)
+    ap.add_argument("--max-depth", type=int, default=4)
+    ap.add_argument("--steps", type=int, default=120)
+    ap.add_argument("--lr", type=float, default=0.08)
+
+    args = ap.parse_args()
+    run_bench(args)
 
 
 if __name__ == "__main__":

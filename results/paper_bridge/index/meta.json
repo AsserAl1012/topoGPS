@@ -1,0 +1,25 @@
+{
+  "model_name": "synthetic",
+  "graph_knn": 12,
+  "graph_min_sim": 0.55,
+  "seed": 42,
+  "normalized": true,
+  "dim": 64,
+  "sigma_knn": 12,
+  "sigma_scale": 1.25,
+  "sigma_min": 0.05,
+  "sigma_max": 1.25,
+  "grid_enabled": true,
+  "grid_n_modules": 6,
+  "grid_d_per_module": 8,
+  "grid_lambdas": [
+    0.45,
+    0.75,
+    1.25,
+    2.1,
+    3.5,
+    5.8
+  ],
+  "grid_seed": 42,
+  "synthetic_task": "bridge"
+}
